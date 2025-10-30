@@ -2,30 +2,43 @@ import isotp
 import logging
 import sys
 
+from enum import IntEnum
 from can.interfaces.slcan import slcanBus
 
+PROFILE_HEADER_LENGTH = 3
+GLOBAL_HEADER_LENGTH = 2
+
+class ConfigType(IntEnum):
+    VIN = 0
+    ACTIVATION = 1
+    SIGLEVEL = 2
+    CONFIGITEM = 3
+
 config_items = [
-    {"configId": 0x04, "fieldLength": 1, "type": 2, "fieldMaxLength": 1, "readOnly": False, "name": "activation"},
-    {"configId": 0x09, "fieldLength": 20, "type": 3, "fieldMaxLength": 20, "readOnly": True, "name": "signal_level"},
-    {"configId": 0x81, "fieldLength": 17, "type": 0, "fieldMaxLength": 17, "readOnly": False, "name": "vin"},
-    {"configId": 0x10, "fieldLength": 128, "type": 1, "fieldMaxLength": 128, "readOnly": False, "name": "apn_dial"},
-    {"configId": 0x11, "fieldLength": 128, "type": 1, "fieldMaxLength": 128, "readOnly": False, "name": "apn_user"},
-    {"configId": 0x12, "fieldLength": 128, "type": 1, "fieldMaxLength": 128, "readOnly": False, "name": "apn_pass"},
-    {"configId": 0x13, "fieldLength": 128, "type": 1, "fieldMaxLength": 128, "readOnly": False, "name": "apn_name"},
-    {"configId": 0x14, "fieldLength": 128, "type": 1, "fieldMaxLength": 128, "readOnly": False, "name": "dns1"},
-    {"configId": 0x15, "fieldLength": 128, "type": 1, "fieldMaxLength": 128, "readOnly": False, "name": "dns2"},
-    {"configId": 0x16, "fieldLength": 128, "type": 1, "fieldMaxLength": 128, "readOnly": False, "name": "proxy"},
-    {"configId": 0x17, "fieldLength": 128, "type": 1, "fieldMaxLength": 128, "readOnly": False, "name": "proxy_port"},
-    {"configId": 0x18, "fieldLength": 128, "type": 1, "fieldMaxLength": 128, "readOnly": False, "name": "apn_connection_type"},
-    {"configId": 0x19, "fieldLength": 128, "type": 1, "fieldMaxLength": 128, "readOnly": False, "name": "server_hostname"},
+    {"configId": 0x04, "fieldLength": 1, "type": ConfigType.ACTIVATION, "readOnly": False, "name": "activation"},
+    {"configId": 0x09, "fieldLength": 20, "type": ConfigType.SIGLEVEL, "readOnly": True, "name": "signal_level"},
+    {"configId": 0x81, "fieldLength": 17, "type": ConfigType.VIN, "readOnly": False, "name": "vin"},
+    {"configId": 0x10, "fieldLength": 128, "type": ConfigType.CONFIGITEM, "readOnly": False, "name": "apn_dial"},
+    {"configId": 0x11, "fieldLength": 128, "type": ConfigType.CONFIGITEM, "readOnly": False, "name": "apn_user"},
+    {"configId": 0x12, "fieldLength": 128, "type": ConfigType.CONFIGITEM, "readOnly": False, "name": "apn_pass"},
+    {"configId": 0x13, "fieldLength": 128, "type": ConfigType.CONFIGITEM, "readOnly": False, "name": "apn_name"},
+    {"configId": 0x14, "fieldLength": 128, "type": ConfigType.CONFIGITEM, "readOnly": False, "name": "dns1"},
+    {"configId": 0x15, "fieldLength": 128, "type": ConfigType.CONFIGITEM, "readOnly": False, "name": "dns2"},
+    {"configId": 0x16, "fieldLength": 128, "type": ConfigType.CONFIGITEM, "readOnly": False, "name": "proxy"},
+    {"configId": 0x17, "fieldLength": 128, "type": ConfigType.CONFIGITEM, "readOnly": False, "name": "proxy_port"},
+    {"configId": 0x18, "fieldLength": 128, "type": ConfigType.CONFIGITEM, "readOnly": False, "name": "apn_connection_type"},
+    {"configId": 0x19, "fieldLength": 128, "type": ConfigType.CONFIGITEM, "readOnly": False, "name": "server_hostname"},
 ]
 
 def startDiagnosticSession(stack):
     print("Starting diagnostic session 0xC0")
     stack.send(bytes([0x10, 0xC0]))
-    response = stack.recv(block=True, timeout=1.0)
-    if response:
-        print(f"Response: {response.hex().upper()}")
+    resp = stack.recv(block=True, timeout=1.0)
+    if resp and len(resp) >= 2 and resp[0] == 0x50 and resp[1] == 0xC0:
+        print("Diagnostic session established")
+    else:
+        print("Diagnostic session failed")
+        exit()
 
 def readParameter(stack, config_id):
     for attempt in range(0, 5): 
@@ -35,15 +48,7 @@ def readParameter(stack, config_id):
         if response:
             return response
 
-def writeParameter(stack, config_id, value):
-    data = bytearray(128 + 3)
-    data[0] = 0x3B
-    data[1] = config_id
-    data[2] = 0x01
-
-    for i, v in enumerate(value):
-        data[3 + i] = v
-        
+def writeParameter(stack, data):
     print(f"Write parameter: {data.hex().upper()}")
     
     stack.send(data)
@@ -51,8 +56,29 @@ def writeParameter(stack, config_id, value):
     if response:
         print(f"Write response: {response.hex().upper()}")
 
+def writeParameterProfile(stack, config_id, value, length):
+    data = bytearray(length + PROFILE_HEADER_LENGTH)
+    data[0] = 0x3B
+    data[1] = config_id
+    data[2] = 0x01
+
+    for i, v in enumerate(value):
+        data[PROFILE_HEADER_LENGTH + i] = v
+
+    writeParameter(stack, data)
+
+def writeParameterGlobal(stack, config_id, value, length):
+    data = bytearray(length + GLOBAL_HEADER_LENGTH)
+    data[0] = 0x3B
+    data[1] = config_id
+
+    for i, v in enumerate(value):
+        data[GLOBAL_HEADER_LENGTH + i] = v
+
+    writeParameter(stack, data)
+
 def isotp_error_handler(error):
-    logging.warning('IsoTp error happened : %s - %s' % (error.__class__.__name__, str(error)))
+    logging.warning('IsoTp error : %s - %s' % (error.__class__.__name__, str(error)))
 
 def main():
     write_item = None
@@ -66,7 +92,7 @@ def main():
         write_value = sys.argv[3] 
     else:
         print("Description: Python script to read/write Nissan Leaf TCU configuration with python-can-isotp")
-        print("This script is an example for use with Lawicel CANUSB")
+        print("This script is an example for use with Lawicel CANUSB (python-can slcanBus)")
         print()
         print("Read usage: python tcu_config.py <serial_port>")
         print("Read example: python tcu_config.py COM4")
@@ -104,7 +130,12 @@ def main():
         if write_item and write_value:
             item = [row for row in config_items if row["name"] == write_item]
             if item and not item[0]['readOnly']:
-                writeParameter(stack, item[0]['configId'], bytearray(write_value, "utf-8"))
+                if item[0]['type'] == ConfigType.ACTIVATION:
+                    writeParameterGlobal(stack, item[0]['configId'], bytes([int(write_value)]), item[0]['fieldLength'])
+                elif item[0]['type'] == ConfigType.VIN:
+                    writeParameterGlobal(stack, item[0]['configId'], bytearray(write_value, "utf-8"), item[0]['fieldLength'])
+                else:
+                    writeParameterProfile(stack, item[0]['configId'], bytearray(write_value, "utf-8"), item[0]['fieldLength'])
             else:
                 print(f"Config item {write_item} is not writable")
                 exit() 
@@ -113,15 +144,17 @@ def main():
         for item in config_items:
             value = readParameter(stack, item['configId'])
             
-            if item['type'] == 2  :
+            if item['type'] == ConfigType.ACTIVATION:
                 print(f"Name: {item['name']}, Value: {value[2]}, Raw: {value.hex().upper()}")
-            elif item['type'] == 3:
+            elif item['type'] == ConfigType.VIN:
+                print(f"Name: {item['name']}, Value: {value[GLOBAL_HEADER_LENGTH:].decode('utf-8').strip()}")
+            elif item['type'] == ConfigType.SIGLEVEL:
                 tel_ant_level = int(value[2])
                 reception_power = int(value[3])
                 error_rate = int(value[4])
                 print(f"Name: {item['name']}, Value: ANT:{tel_ant_level},RECEPTION:{reception_power},ERRRATE:{error_rate}")     
             else:
-                print(f"Name: {item['name']}, Value: {value[3:].decode('utf-8').strip()}")
+                print(f"Name: {item['name']}, Value: {value[PROFILE_HEADER_LENGTH:].decode('utf-8').strip()}")
 
     except isotp.BlockingSendFailure:
         print("Isotp send failed")
